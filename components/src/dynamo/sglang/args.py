@@ -21,7 +21,7 @@ from sglang.srt.server_args_config_parser import ConfigArgumentMerger
 from dynamo._core import get_reasoning_parser_names, get_tool_parser_names
 from dynamo.common.config_dump import register_encoder
 from dynamo.common.utils.runtime import parse_endpoint
-from dynamo.llm import fetch_llm
+from dynamo.llm import fetch_model
 from dynamo.runtime.logging import configure_dynamo_logging
 from dynamo.sglang import __version__
 
@@ -98,12 +98,12 @@ DYNAMO_ARGS: Dict[str, Dict[str, Any]] = {
         "default": None,
         "help": "Dump debug config to the specified file path. If not specified, the config will be dumped to stdout at INFO level.",
     },
-    "store-kv": {
-        "flags": ["--store-kv"],
+    "discovery-backend": {
+        "flags": ["--discovery-backend"],
         "type": str,
-        "choices": ["etcd", "file", "mem"],
-        "default": os.environ.get("DYN_STORE_KV", "etcd"),
-        "help": "Which key-value backend to use: etcd, mem, file. Etcd uses the ETCD_* env vars (e.g. ETCD_ENDPOINTS) for connection details. File uses root dir from env var DYN_FILE_KV or defaults to $TMPDIR/dynamo_store_kv.",
+        "choices": ["kubernetes", "etcd", "file", "mem"],
+        "default": os.environ.get("DYN_DISCOVERY_BACKEND", "etcd"),
+        "help": "Discovery backend: kubernetes (K8s API), etcd (distributed KV), file (local filesystem), mem (in-memory). Etcd uses the ETCD_* env vars (e.g. ETCD_ENDPOINTS) for connection details. File uses root dir from env var DYN_FILE_KV or defaults to $TMPDIR/dynamo_store_kv.",
     },
     "request-plane": {
         "flags": ["--request-plane"],
@@ -157,7 +157,7 @@ class DynamoArgs:
     namespace: str
     component: str
     endpoint: str
-    store_kv: str
+    discovery_backend: str
     request_plane: str
     event_plane: str
 
@@ -507,17 +507,17 @@ async def parse_args(args: list[str]) -> Config:
     if not parsed_args.served_model_name:
         parsed_args.served_model_name = model_path
     # Download the model if necessary using modelexpress.
-    # We don't set `parsed_args.model_path` to the local path fetch_llm returns
+    # We don't set `parsed_args.model_path` to the local path fetch_model returns
     # because sglang will send this to its pipeline-parallel workers, which may
     # not have the local path.
     # sglang will attempt to download the model again, but find it in the HF cache.
     # For non-HF models use a path instead of an HF name, and ensure all workers have
     # that path (ideally via a shared folder).
     if not os.path.exists(model_path):
-        await fetch_llm(model_path)
+        await fetch_model(model_path)
 
     # TODO: sglang downloads the model in `from_cli_args`, which means we had to
-    # fetch_llm (download the model) here, in `parse_args`. `parse_args` should not
+    # fetch_model (download the model) here, in `parse_args`. `parse_args` should not
     # contain code to download a model, it should only parse the args.
 
     # For diffusion/video workers, create a minimal dummy ServerArgs since diffusion
@@ -595,7 +595,7 @@ async def parse_args(args: list[str]) -> Config:
         namespace=parsed_namespace,
         component=parsed_component_name,
         endpoint=parsed_endpoint_name,
-        store_kv=parsed_args.store_kv,
+        discovery_backend=parsed_args.discovery_backend,
         request_plane=parsed_args.request_plane,
         event_plane=parsed_args.event_plane,
         tool_call_parser=tool_call_parser,

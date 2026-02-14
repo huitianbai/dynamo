@@ -32,7 +32,7 @@ from dynamo.sglang.health_check import (
 from dynamo.sglang.publisher import DynamoSglangPublisher, setup_sgl_metrics
 from dynamo.sglang.register import (
     register_image_diffusion_model,
-    register_llm_with_readiness_gate,
+    register_model_with_readiness_gate,
     register_video_generation_model,
 )
 from dynamo.sglang.request_handlers import (
@@ -203,7 +203,7 @@ async def worker():
 
     dynamo_args = config.dynamo_args
     runtime, loop = create_runtime(
-        store_kv=dynamo_args.store_kv,
+        discovery_backend=dynamo_args.discovery_backend,
         request_plane=dynamo_args.request_plane,
         event_plane=dynamo_args.event_plane,
         use_kv_events=dynamo_args.use_kv_events,
@@ -307,7 +307,7 @@ async def init(
                 metrics_labels=metrics_labels,
                 health_check_payload=health_check_payload,
             ),
-            register_llm_with_readiness_gate(
+            register_model_with_readiness_gate(
                 engine,
                 generate_endpoint,
                 server_args,
@@ -385,7 +385,7 @@ async def init_prefill(
                 metrics_labels=metrics_labels,
                 health_check_payload=health_check_payload,
             ),
-            register_llm_with_readiness_gate(
+            register_model_with_readiness_gate(
                 engine,
                 generate_endpoint,
                 server_args,
@@ -474,7 +474,7 @@ async def init_diffusion(
                 metrics_labels=metrics_labels,
                 health_check_payload=health_check_payload,
             ),
-            register_llm_with_readiness_gate(
+            register_model_with_readiness_gate(
                 engine,
                 generate_endpoint,
                 server_args,
@@ -538,7 +538,7 @@ async def init_embedding(
                 metrics_labels=metrics_labels,
                 health_check_payload=health_check_payload,
             ),
-            register_llm_with_readiness_gate(
+            register_model_with_readiness_gate(
                 engine,
                 generate_endpoint,
                 server_args,
@@ -766,7 +766,7 @@ async def init_multimodal_processor(
                     (prometheus_names.labels.MODEL_NAME, server_args.served_model_name),
                 ],
             ),
-            register_llm_with_readiness_gate(
+            register_model_with_readiness_gate(
                 None,  # engine
                 generate_endpoint,
                 server_args,

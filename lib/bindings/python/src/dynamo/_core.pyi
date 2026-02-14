@@ -41,7 +41,7 @@ class DistributedRuntime:
     def __new__(
         cls,
         event_loop: Any,
-        store_kv: str,
+        discovery_backend: str,
         request_plane: str,
         enable_nats: Optional[bool] = None,
     ) -> "DistributedRuntime":
@@ -50,7 +50,7 @@ class DistributedRuntime:
 
         Args:
             event_loop: The asyncio event loop
-            store_kv: Key-value store backend ("etcd", "file", or "mem")
+            discovery_backend: Discovery backend ("kubernetes", "etcd", "file", or "mem")
             request_plane: Request plane transport ("tcp", "http", or "nats")
             enable_nats: Whether to enable NATS for KV events. Defaults to True.
                         If request_plane is "nats", NATS is always enabled.
@@ -1011,7 +1011,7 @@ class KvRouterConfig:
         """
         ...
 
-async def register_llm(
+async def register_model(
     model_input: ModelInput,
     model_type: ModelType,
     endpoint: Endpoint,
@@ -1040,7 +1040,7 @@ async def register_llm(
     """
     ...
 
-async def unregister_llm(
+async def unregister_model(
     endpoint: Endpoint,
     lora_name: Optional[str] = None,
 ) -> None:
@@ -1055,13 +1055,18 @@ def lora_name_to_id(lora_name: str) -> int:
     """Generate a deterministic integer ID from a LoRA name using blake3 hash."""
     ...
 
-async def fetch_llm(remote_name: str, ignore_weights: bool = False) -> str:
+async def fetch_model(remote_name: str, ignore_weights: bool = False) -> str:
     """
-    Download a model from Hugging Face, returning it's local path.
+    Download a model from Hugging Face, returning its local path.
     If `ignore_weights` is True, only fetches tokenizer and config files.
-    Example: `model_path = await fetch_llm("Qwen/Qwen3-0.6B")`
+    Example: `model_path = await fetch_model("Qwen/Qwen3-0.6B")`
     """
     ...
+
+# Backward-compatible aliases (deprecated, use new names)
+fetch_llm = fetch_model
+register_llm = register_model
+unregister_llm = unregister_model
 
 class EngineConfig:
     """Holds internal configuration for a Dynamo engine."""
