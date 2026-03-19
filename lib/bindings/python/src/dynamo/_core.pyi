@@ -629,7 +629,7 @@ class KvIndexer:
         ...
 
     def find_matches_for_request(
-        self, token_ids: List[int], lora_name: Optional[str] = None
+        self, token_ids: List[int], lora_name: Optional[str] = None, is_eagle: Optional[bool] = None
     ) -> OverlapScores:
         """
         Return the overlapping scores of workers for the given token ids.
@@ -677,7 +677,7 @@ class ApproxKvIndexer:
         ...
 
     def find_matches_for_request(
-        self, token_ids: List[int], lora_name: Optional[str] = None
+        self, token_ids: List[int], lora_name: Optional[str] = None, is_eagle: Optional[bool] = None
     ) -> OverlapScores:
         """
         Return the overlapping scores of workers for the given token ids.

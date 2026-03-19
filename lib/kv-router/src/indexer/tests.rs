@@ -499,7 +499,10 @@ async fn test_find_matches_for_request(variant: &str) {
 
     // Empty index should return no matches
     let tokens = vec![1, 2, 3, 4];
-    let scores = index.find_matches_for_request(&tokens, None).await.unwrap();
+    let scores = index
+        .find_matches_for_request(&tokens, None, None)
+        .await
+        .unwrap();
     assert!(scores.scores.is_empty());
 
     // Store some data and verify we can find it via tokens
@@ -511,7 +514,10 @@ async fn test_find_matches_for_request(variant: &str) {
     // Note: find_matches_for_request computes block hashes from tokens,
     // so we need tokens that hash to the same LocalBlockHash values.
     // For this test, we just verify the method works without error.
-    let scores = index.find_matches_for_request(&tokens, None).await.unwrap();
+    let scores = index
+        .find_matches_for_request(&tokens, None, None)
+        .await
+        .unwrap();
     // The tokens [1,2,3,4] won't match our stored [1,2,3] local hashes
     // because find_matches_for_request computes different hashes from raw tokens
     assert!(scores.scores.is_empty() || !scores.scores.is_empty());
@@ -830,8 +836,9 @@ async fn test_lora_and_base_model_blocks_do_not_conflict(variant: &str) {
     // Same token sequence for both base model and LoRA adapter
     let tokens: Vec<u32> = (0..kv_block_size * 3).collect();
 
-    let base_hashes = compute_block_hash_for_seq(&tokens, kv_block_size, None, None);
-    let lora_hashes = compute_block_hash_for_seq(&tokens, kv_block_size, None, Some("my-adapter"));
+    let base_hashes = compute_block_hash_for_seq(&tokens, kv_block_size, None, None, None);
+    let lora_hashes =
+        compute_block_hash_for_seq(&tokens, kv_block_size, None, Some("my-adapter"), None);
 
     // Hashes must differ despite identical tokens
     assert_ne!(
@@ -916,8 +923,9 @@ async fn test_lora_base_same_tokens_no_seq_hash_mismatch(variant: &str) {
     let tokens: Vec<u32> = (0..kv_block_size * 3).collect();
 
     // With LoRA-aware hashing, base and adapter produce different LocalBlockHash
-    let base_local = compute_block_hash_for_seq(&tokens, kv_block_size, None, None);
-    let lora_local = compute_block_hash_for_seq(&tokens, kv_block_size, None, Some("my-adapter"));
+    let base_local = compute_block_hash_for_seq(&tokens, kv_block_size, None, None, None);
+    let lora_local =
+        compute_block_hash_for_seq(&tokens, kv_block_size, None, Some("my-adapter"), None);
 
     assert_ne!(
         base_local, lora_local,
@@ -989,8 +997,10 @@ async fn test_different_lora_adapters_do_not_conflict(variant: &str) {
 
     let tokens: Vec<u32> = (0..kv_block_size * 2).collect();
 
-    let hashes_a = compute_block_hash_for_seq(&tokens, kv_block_size, None, Some("adapter-a"));
-    let hashes_b = compute_block_hash_for_seq(&tokens, kv_block_size, None, Some("adapter-b"));
+    let hashes_a =
+        compute_block_hash_for_seq(&tokens, kv_block_size, None, Some("adapter-a"), None);
+    let hashes_b =
+        compute_block_hash_for_seq(&tokens, kv_block_size, None, Some("adapter-b"), None);
 
     assert_ne!(
         hashes_a, hashes_b,

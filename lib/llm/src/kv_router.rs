@@ -304,6 +304,7 @@ pub struct KvRouter {
     kv_router_config: KvRouterConfig,
     cancellation_token: tokio_util::sync::CancellationToken,
     client: Client,
+    is_eagle: bool,
 }
 
 impl KvRouter {
@@ -317,6 +318,7 @@ impl KvRouter {
         kv_router_config: Option<KvRouterConfig>,
         worker_type: &'static str,
         model_name: Option<String>,
+        is_eagle: bool,
     ) -> Result<Self> {
         let kv_router_config = kv_router_config.unwrap_or_default();
         kv_router_config.validate()?;
@@ -367,6 +369,7 @@ impl KvRouter {
             kv_router_config,
             cancellation_token,
             client,
+            is_eagle,
         })
     }
 
@@ -415,6 +418,7 @@ impl KvRouter {
                 self.block_size,
                 block_mm_infos,
                 lora_name.as_deref(),
+                Some(self.is_eagle),
             )
         });
         let hash_elapsed = start.elapsed();
@@ -433,6 +437,7 @@ impl KvRouter {
                 self.block_size,
                 router_config_override,
                 lora_name.as_deref(),
+                Some(self.is_eagle),
             )
         });
         let seq_hash_elapsed = start.elapsed();
@@ -501,6 +506,7 @@ impl KvRouter {
             self.block_size,
             router_config_override,
             lora_name.as_deref(),
+            Some(self.is_eagle),
         );
 
         if let Err(e) = self
@@ -559,7 +565,13 @@ impl KvRouter {
         worker: WorkerWithDpRank,
         lora_name: Option<&str>,
     ) -> Result<u32, KvRouterError> {
-        let block_hashes = compute_block_hash_for_seq(tokens, self.block_size, None, lora_name);
+        let block_hashes = compute_block_hash_for_seq(
+            tokens,
+            self.block_size,
+            None,
+            lora_name,
+            Some(self.is_eagle),
+        );
         let overlap_scores = self.indexer.find_matches(block_hashes).await?;
         Ok(overlap_scores.scores.get(&worker).copied().unwrap_or(0))
     }
@@ -572,7 +584,13 @@ impl KvRouter {
         lora_name: Option<&str>,
     ) -> Result<Vec<PotentialLoad>> {
         let isl_tokens = tokens.len();
-        let block_hashes = compute_block_hash_for_seq(tokens, self.block_size, None, lora_name);
+        let block_hashes = compute_block_hash_for_seq(
+            tokens,
+            self.block_size,
+            None,
+            lora_name,
+            Some(self.is_eagle),
+        );
         let overlap_scores = self.indexer.find_matches(block_hashes.clone()).await?;
 
         let maybe_seq_hashes = self.kv_router_config.compute_seq_hashes_for_tracking(
@@ -580,6 +598,7 @@ impl KvRouter {
             self.block_size,
             router_config_override,
             lora_name,
+            Some(self.is_eagle),
         );
 
         Ok(self
