@@ -20,9 +20,9 @@ Both modes support priority-based pool overrides from agent hints and optional p
 
 - **vLLM** - Uses synchronous prefill path (frontend waits for prefill to complete)
 - **Mocker** - Uses same synchronous path as vLLM
+- **SGLang** - Uses the bootstrap path: the prefill worker returns `bootstrap_host`/`bootstrap_port`/`bootstrap_room` in `disaggregated_params`, the decode worker pulls the KV cache out-of-band (NIXL), and the global router forwards the bootstrap info to the decode pool
 
 **Not supported:**
-- **SGLang** - Bootstrap path (async KV transfer) not implemented
 - **TensorRT-LLM** - Bootstrap path not implemented
 
 ## Architecture
