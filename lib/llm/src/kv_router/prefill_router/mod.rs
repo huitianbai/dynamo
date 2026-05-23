@@ -18,7 +18,6 @@ use dynamo_runtime::{
 
 use crate::{
     discovery::ModelManager,
-    protocols::common::preprocessor::BootstrapInfo,
     protocols::common::{
         llm_backend::{LLMEngineOutput, PreprocessedRequest},
         timing::{RequestPhase, RequestTracker},
@@ -193,39 +192,16 @@ impl
 
                 // In Direct mode, pass preselected_worker so execute_prefill uses
                 // router.direct() instead of router.generate() (which bails in Direct mode).
-                let (result, _worker_info) = Self::execute_prefill(
+                // execute_prefill returns the PrefillOutcome directly (Bootstrap for the
+                // SGLang disaggregated path, Completed otherwise), so there is no
+                // disaggregated_params re-parsing here.
+                Self::execute_prefill(
                     self.prefill_router.get().cloned(),
                     prefill_context,
                     preselected_worker,
                     None,
                 )
-                .await?;
-
-                if result.prompt_tokens_details.is_none() {
-                    // Extract bootstrap_host, bootstrap_port, bootstrap_room from disaggregated_params
-                    let params = &result.disaggregated_params;
-                    let bootstrap_host = params.get("bootstrap_host").and_then(|v| v.as_str());
-                    let bootstrap_port = params
-                        .get("bootstrap_port")
-                        .and_then(|v| v.as_u64())
-                        .map(|p| p as u16);
-                    let bootstrap_room = params.get("bootstrap_room").and_then(|v| v.as_u64());
-
-                    if let (Some(host), Some(port), Some(room)) =
-                        (bootstrap_host, bootstrap_port, bootstrap_room)
-                    {
-                        let bootstrap_info = BootstrapInfo {
-                            bootstrap_host: host.to_string(),
-                            bootstrap_port: port,
-                            bootstrap_room: room,
-                        };
-                        Ok(PrefillOutcome::Bootstrap(bootstrap_info))
-                    } else {
-                        Ok(PrefillOutcome::Completed(result))
-                    }
-                } else {
-                    Ok(PrefillOutcome::Completed(result))
-                }
+                .await
             }
         };
 

@@ -11,11 +11,31 @@ use tracing::Instrument;
 use dynamo_kv_router::protocols::{BlockExtraInfo, RoutingConstraints, WorkerId};
 use dynamo_runtime::{pipeline::SingleIn, protocols::maybe_error::MaybeError};
 
-use super::{InnerPrefillRouter, PrefillError, PrefillResolveDecision, PrefillRouter};
+use super::{
+    InnerPrefillRouter, PrefillError, PrefillOutcome, PrefillResolveDecision, PrefillRouter,
+};
 use crate::protocols::common::{
     llm_backend::PreprocessedRequest,
     preprocessor::{BootstrapInfo, PrefillResult},
 };
+
+/// Extract SGLang KV-transfer bootstrap info from a prefill worker's `disaggregated_params`.
+///
+/// Returns `None` when any required field is missing. This is the discriminator between the
+/// disaggregated bootstrap path (SGLang) and the synchronous/aggregated completed path: we
+/// key off the *presence* of the bootstrap fields rather than `prompt_tokens_details` being
+/// absent, so the bootstrap path keeps working if a backend later starts populating
+/// `prompt_tokens_details`.
+fn extract_bootstrap_info(params: &serde_json::Value) -> Option<BootstrapInfo> {
+    let bootstrap_host = params.get("bootstrap_host")?.as_str()?.to_string();
+    let bootstrap_port = u16::try_from(params.get("bootstrap_port")?.as_u64()?).ok()?;
+    let bootstrap_room = params.get("bootstrap_room")?.as_u64()?;
+    Some(BootstrapInfo {
+        bootstrap_host,
+        bootstrap_port,
+        bootstrap_room,
+    })
+}
 
 impl PrefillRouter {
     /// Select a prefill worker and resolve its bootstrap connection info.
@@ -130,13 +150,15 @@ impl PrefillRouter {
     /// allowing subsequent `set_phase` calls to proceed. This preserves the current synchronization:
     /// the prefill route must finish worker recording before the phase can change to Decode.
     ///
-    /// Returns (PrefillResult, Option<(worker_id, dp_rank)>).
+    /// Returns the [`PrefillOutcome`]: `Bootstrap` for the SGLang disaggregated path (KV is
+    /// transferred out-of-band and decode is handed the bootstrap info), or `Completed` for a
+    /// synchronous prefill whose result is forwarded to decode.
     pub(super) async fn execute_prefill(
         router: Option<InnerPrefillRouter>,
         request: SingleIn<PreprocessedRequest>,
         target_worker: Option<u64>,
         phase_transition_permit: Option<OwnedSemaphorePermit>,
-    ) -> Result<(PrefillResult, Option<(u64, Option<u32>)>), PrefillError> {
+    ) -> Result<PrefillOutcome, PrefillError> {
         let router = router.ok_or(PrefillError::NotActivated)?;
         // Clone tracker before request is consumed by generate_to_worker.
         // Used to record prefill_complete_time for KV transfer latency metric.
@@ -175,54 +197,38 @@ impl PrefillRouter {
             ));
         }
 
+        // SGLang disaggregated bootstrap path: the prefill worker's first output carries
+        // bootstrap_host/port/room in `disaggregated_params`. Gate on the presence of those
+        // fields (see `extract_bootstrap_info`) rather than on `prompt_tokens_details` being
+        // absent.
+        if let Some(bootstrap_info) = first_output
+            .data
+            .as_ref()
+            .and_then(|o| o.disaggregated_params.as_ref())
+            .and_then(extract_bootstrap_info)
+        {
+            // Drain the rest of the prefill stream in the BACKGROUND so the SGLang prefill
+            // worker finishes its post-bootstrap work and the stream closes cleanly.
+            //
+            // This must NOT be done synchronously: in disaggregated serving the prefill
+            // stream does not complete until its KV cache is handed off to the decode
+            // worker, but decode only starts after this function returns. Draining inline
+            // would wait for a handoff that can never happen (deadlock). A spawned task
+            // lets decode proceed while the prefill stream is consumed to completion,
+            // which avoids the server-side "Failed to publish complete final for stream
+            // ... endpoint=prefill_generate" error caused by dropping the stream early.
+            tokio::spawn(async move { while prefill_response.next().await.is_some() {} });
+
+            return Ok(PrefillOutcome::Bootstrap(bootstrap_info));
+        }
+
+        // Synchronous / aggregated completed-prefill path (e.g. vLLM): drain the stream to
+        // collect prompt_tokens_details, then hand the full result to decode.
         let mut prompt_tokens_details = first_output
             .data
             .as_ref()
             .and_then(|o| o.completion_usage.as_ref())
             .and_then(|u| u.prompt_tokens_details.clone());
-
-        if prompt_tokens_details.is_none() {
-            let disaggregated_params = first_output
-                .data
-                .as_ref()
-                .and_then(|o| o.disaggregated_params.as_ref());
-
-            // Validate that bootstrap_host, bootstrap_port, bootstrap_room exist
-            let new_disaggregated_params: serde_json::Value = if let Some(params) =
-                disaggregated_params
-            {
-                let bootstrap_host = params.get("bootstrap_host").and_then(|v| v.as_str());
-                let bootstrap_port = params.get("bootstrap_port").and_then(|v| v.as_u64());
-                let bootstrap_room = params.get("bootstrap_room").and_then(|v| v.as_u64());
-
-                match (bootstrap_host, bootstrap_port, bootstrap_room) {
-                    (Some(host), Some(port), Some(room)) => {
-                        serde_json::json!({
-                            "bootstrap_host": host,
-                            "bootstrap_port": port,
-                            "bootstrap_room": room,
-                        })
-                    }
-                    _ => {
-                        return Err(PrefillError::NoDisaggregatedParams(
-                            "disaggregated_params missing required fields: bootstrap_host, bootstrap_port, or bootstrap_room".to_string(),
-                        ));
-                    }
-                }
-            } else {
-                return Err(PrefillError::NoDisaggregatedParams(
-                    "disaggregated_params field missing in prefill router output".to_string(),
-                ));
-            };
-
-            return Ok((
-                PrefillResult {
-                    disaggregated_params: new_disaggregated_params,
-                    prompt_tokens_details: None,
-                },
-                None,
-            ));
-        }
 
         while let Some(next) = prefill_response.next().await {
             if let Some(o) = next.data.as_ref()
@@ -247,27 +253,10 @@ impl PrefillRouter {
             ));
         };
 
-        // Extract prefill worker ID and dp_rank from disaggregated_params
-        let prefill_worker_info =
-            disaggregated_params
-                .get("worker_id")
-                .and_then(|worker_id_json| {
-                    let worker_id = worker_id_json
-                        .get("prefill_worker_id")
-                        .and_then(|v| v.as_u64())?;
-                    let dp_rank = worker_id_json
-                        .get("prefill_dp_rank")
-                        .and_then(|v| v.as_u64())
-                        .map(|r| r as u32);
-                    Some((worker_id, dp_rank))
-                });
-        Ok((
-            PrefillResult {
-                disaggregated_params,
-                prompt_tokens_details,
-            },
-            prefill_worker_info,
-        ))
+        Ok(PrefillOutcome::Completed(PrefillResult {
+            disaggregated_params,
+            prompt_tokens_details,
+        }))
     }
 
     /// Spawn prefill as a background task.
@@ -404,6 +393,44 @@ mod tests {
     use super::*;
 
     const MAX_ROOM: u64 = i64::MAX as u64;
+
+    #[test]
+    fn extract_bootstrap_info_parses_valid_params() {
+        let params = serde_json::json!({
+            "bootstrap_host": "10.0.0.5",
+            "bootstrap_port": 12345,
+            "bootstrap_room": 987654321u64,
+            // extra fields (e.g. worker_id) must be ignored
+            "worker_id": {"prefill_worker_id": 7},
+        });
+        let info = extract_bootstrap_info(&params).expect("valid params should parse");
+        assert_eq!(info.bootstrap_host, "10.0.0.5");
+        assert_eq!(info.bootstrap_port, 12345);
+        assert_eq!(info.bootstrap_room, 987654321);
+    }
+
+    #[test]
+    fn extract_bootstrap_info_none_when_field_missing() {
+        // Missing bootstrap_room -> not the bootstrap path (falls through to Completed).
+        let missing_room = serde_json::json!({
+            "bootstrap_host": "10.0.0.5",
+            "bootstrap_port": 12345,
+        });
+        assert!(extract_bootstrap_info(&missing_room).is_none());
+        // An aggregated / vLLM completed prefill carries no bootstrap fields.
+        assert!(extract_bootstrap_info(&serde_json::json!({})).is_none());
+    }
+
+    #[test]
+    fn extract_bootstrap_info_rejects_out_of_range_port() {
+        // bootstrap_port must fit in u16 -> reject rather than silently truncating.
+        let params = serde_json::json!({
+            "bootstrap_host": "h",
+            "bootstrap_port": 70000,
+            "bootstrap_room": 1,
+        });
+        assert!(extract_bootstrap_info(&params).is_none());
+    }
 
     #[test]
     fn bootstrap_room_falls_back_when_dp_unavailable() {
